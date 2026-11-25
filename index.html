@@ -1,0 +1,619 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>GOES-19 HT — Série Temporal 3D (Three.js + OpenTopoMap)</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      background: #070b14;
+      color: #f8fafc;
+      overflow: hidden;
+    }
+    #canvas-container {
+      position: fixed;
+      inset: 0;
+      width: 100vw;
+      height: 100vh;
+    }
+    .hud {
+      position: fixed;
+      top: 16px;
+      left: 16px;
+      z-index: 10;
+      width: 350px;
+      max-height: calc(100vh - 32px);
+      overflow-y: auto;
+      background: rgba(15, 23, 42, 0.92);
+      backdrop-filter: blur(8px);
+      border: 1px solid rgba(148, 163, 184, 0.28);
+      border-radius: 12px;
+      padding: 16px;
+      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.6);
+    }
+    .hud h1 { font-size: 15px; font-weight: 700; margin-bottom: 4px; }
+    .hud p { font-size: 12px; color: #cbd5e1; margin-bottom: 12px; line-height: 1.4; }
+    .control { margin-bottom: 12px; }
+    .control label { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 4px; }
+    .control input[type="range"], .control input[type="file"] { width: 100%; }
+    .anim-box {
+      background: rgba(30, 41, 59, 0.75);
+      border: 1px solid rgba(148, 163, 184, 0.25);
+      border-radius: 8px;
+      padding: 10px;
+      margin-bottom: 12px;
+    }
+    .anim-row { display: flex; gap: 6px; margin-bottom: 8px; }
+    .btn {
+      flex: 1;
+      background: #0284c7;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      padding: 7px 10px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .btn:hover { background: #0369a1; }
+    .btn.secondary { background: #334155; }
+    .btn.secondary:hover { background: #475569; }
+    .timestamp-badge {
+      font-size: 12px;
+      font-weight: 700;
+      color: #38bdf8;
+      text-align: center;
+      margin-top: 4px;
+    }
+    .colorbar {
+      height: 11px;
+      border-radius: 5px;
+      background: linear-gradient(90deg, #2563eb, #06b6d4, #22c55e, #eab308, #ef4444);
+      margin-top: 4px;
+    }
+    .scale-labels {
+      display: flex;
+      justify-content: space-between;
+      font-size: 11px;
+      color: #cbd5e1;
+      margin-top: 3px;
+    }
+    .selected-box {
+      margin-top: 10px;
+      padding: 10px;
+      border-radius: 8px;
+      background: rgba(30, 41, 59, 0.92);
+      border: 1px solid rgba(56, 189, 248, 0.55);
+      font-size: 12px;
+      line-height: 1.45;
+      display: none;
+    }
+    .selected-box strong { color: #38bdf8; }
+    .info { margin-top: 10px; font-size: 11px; color: #93c5fd; line-height: 1.4; }
+    .click-popup {
+      position: fixed;
+      z-index: 20;
+      pointer-events: none;
+      background: rgba(2, 6, 23, 0.96);
+      border: 1px solid #38bdf8;
+      color: #f8fafc;
+      padding: 8px 11px;
+      border-radius: 8px;
+      font-size: 12px;
+      line-height: 1.45;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.65);
+      display: none;
+      transform: translate(12px, -12px);
+    }
+  </style>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.169.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.169.0/examples/jsm/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <div id="canvas-container"></div>
+
+  <div class="hud">
+    <h1>GOES-19 HT — Evolução 3D (Brasil)</h1>
+    <p>Plano de fundo: OpenTopoMap Relevo | Clique no ponto para altura, lat e lon</p>
+
+    <div class="anim-box">
+      <div class="anim-row">
+        <button id="playPauseBtn" class="btn">▶ Animar</button>
+        <button id="prevBtn" class="btn secondary">◀ Ant.</button>
+        <button id="nextBtn" class="btn secondary">Próx. ▶</button>
+      </div>
+      <div class="control" style="margin-bottom:6px;">
+        <label for="frameSlider">
+          <span>Quadro cronológico</span>
+          <span id="frameCounter">1 / 4</span>
+        </label>
+        <input id="frameSlider" type="range" min="0" max="3" step="1" value="0" />
+      </div>
+      <div class="control" style="margin-bottom:4px;">
+        <label for="speedSlider">
+          <span>Intervalo da animação</span>
+          <span id="speedLabel">900 ms</span>
+        </label>
+        <input id="speedSlider" type="range" min="250" max="2500" step="50" value="900" />
+      </div>
+      <div id="timestampLabel" class="timestamp-badge">Aguardando dados...</div>
+    </div>
+
+    <div class="control">
+      <label for="fileInput"><span>Carregar GeoJSONs locais (múltiplos)</span></label>
+      <input id="fileInput" type="file" accept=".geojson,.json" multiple />
+    </div>
+
+    <div class="control">
+      <label for="exagInput">
+        <span>Exagero vertical</span>
+        <span id="exagLabel">0.0020x</span>
+      </label>
+      <input id="exagInput" type="range" min="0.0005" max="0.0200" step="0.0005" value="0.002" />
+    </div>
+
+    <div class="control">
+      <label for="sizeInput">
+        <span>Tamanho dos pontos</span>
+        <span id="sizeLabel">0.24</span>
+      </label>
+      <input id="sizeInput" type="range" min="0.06" max="0.80" step="0.02" value="0.24" />
+    </div>
+
+    <div>
+      <span style="font-size:11px;">Escala de cores — Altura do topo de nuvens (km)</span>
+      <div class="colorbar"></div>
+      <div class="scale-labels">
+        <span>0 km</span>
+        <span>4 km</span>
+        <span>8 km</span>
+        <span>12 km</span>
+        <span>16+ km</span>
+      </div>
+    </div>
+
+    <div id="selectedBox" class="selected-box"></div>
+    <div id="info" class="info">Carregando OpenTopoMap e série cronológica...</div>
+  </div>
+
+  <div id="clickPopup" class="click-popup"></div>
+
+  <script type="module">
+    import * as THREE from "three";
+    import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+
+    const LON_MIN = -74.5;
+    const LON_MAX = -34.0;
+    const LAT_MIN = -34.0;
+    const LAT_MAX = 5.5;
+    const SEQUENCE_FILES = ["GOES19_HT_2026329_0120UTC_3D.geojson", "GOES19_HT_2026329_0130UTC_3D.geojson", "GOES19_HT_2026329_0140UTC_3D.geojson", "GOES19_HT_2026329_0150UTC_3D.geojson"];
+
+    const EARTH_R = 6378137.0;
+    function lonToMercX(lon) { return (lon * Math.PI / 180) * EARTH_R; }
+    function latToMercY(lat) {
+      const clamped = Math.max(-85.05112878, Math.min(85.05112878, lat));
+      const rad = clamped * Math.PI / 180;
+      return Math.log(Math.tan(Math.PI / 4 + rad / 2)) * EARTH_R;
+    }
+
+    const MERC_X_MIN = lonToMercX(LON_MIN);
+    const MERC_X_MAX = lonToMercX(LON_MAX);
+    const MERC_Y_MIN = latToMercY(LAT_MIN);
+    const MERC_Y_MAX = latToMercY(LAT_MAX);
+
+    const MERC_CENTER_X = (MERC_X_MIN + MERC_X_MAX) * 0.5;
+    const MERC_CENTER_Y = (MERC_Y_MIN + MERC_Y_MAX) * 0.5;
+
+    const METERS_TO_SCENE = 1 / 100000;
+    const SCENE_WIDTH = (MERC_X_MAX - MERC_X_MIN) * METERS_TO_SCENE;
+    const SCENE_DEPTH = (MERC_Y_MAX - MERC_Y_MIN) * METERS_TO_SCENE;
+
+    function geoToSceneXZ(lon, lat) {
+      const mx = lonToMercX(lon);
+      const my = latToMercY(lat);
+      return {
+        x: (mx - MERC_CENTER_X) * METERS_TO_SCENE,
+        z: -(my - MERC_CENTER_Y) * METERS_TO_SCENE
+      };
+    }
+
+    const container = document.getElementById("canvas-container");
+    const infoEl = document.getElementById("info");
+    const selectedBoxEl = document.getElementById("selectedBox");
+    const clickPopupEl = document.getElementById("clickPopup");
+    const timestampLabelEl = document.getElementById("timestampLabel");
+    const frameCounterEl = document.getElementById("frameCounter");
+    const frameSliderEl = document.getElementById("frameSlider");
+    const playPauseBtn = document.getElementById("playPauseBtn");
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x070b14);
+
+    const camera = new THREE.PerspectiveCamera(48, window.innerWidth / window.innerHeight, 0.1, 2000);
+    camera.position.set(0, 30, 42);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    container.appendChild(renderer.domElement);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.06;
+
+    // Plano de fundo: OpenTopoMap Relevo (open-source, sem API Key)
+    const mapGroup = new THREE.Group();
+    scene.add(mapGroup);
+
+    function lon2tile(lon, zoom) { return Math.floor(((lon + 180) / 360) * Math.pow(2, zoom)); }
+    function lat2tile(lat, zoom) {
+      const rad = lat * Math.PI / 180;
+      return Math.floor(((1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2) * Math.pow(2, zoom));
+    }
+    function tile2lon(x, zoom) { return (x / Math.pow(2, zoom)) * 360 - 180; }
+    function tile2lat(y, zoom) {
+      const n = Math.PI - (2 * Math.PI * y) / Math.pow(2, zoom);
+      return (180 / Math.PI) * Math.atan(0.5 * (Math.exp(n) - Math.exp(-n)));
+    }
+
+    function buildOpenTopoMap3D() {
+      const zoom = 5;
+      const xMin = lon2tile(LON_MIN, zoom);
+      const xMax = lon2tile(LON_MAX, zoom);
+      const yMin = lat2tile(LAT_MAX, zoom);
+      const yMax = lat2tile(LAT_MIN, zoom);
+
+      const subdomains = ["a", "b", "c"];
+      const loader = new THREE.TextureLoader();
+      loader.setCrossOrigin("anonymous");
+
+      for (let tx = xMin; tx <= xMax; tx++) {
+        for (let ty = yMin; ty <= yMax; ty++) {
+          const wLon = tile2lon(tx, zoom);
+          const eLon = tile2lon(tx + 1, zoom);
+          const nLat = tile2lat(ty, zoom);
+          const sLat = tile2lat(ty + 1, zoom);
+
+          const nw = geoToSceneXZ(wLon, nLat);
+          const se = geoToSceneXZ(eLon, sLat);
+
+          const tileW = Math.abs(se.x - nw.x);
+          const tileD = Math.abs(se.z - nw.z);
+          const centerX = (nw.x + se.x) * 0.5;
+          const centerZ = (nw.z + se.z) * 0.5;
+
+          const geo = new THREE.PlaneGeometry(tileW, tileD);
+          geo.rotateX(-Math.PI / 2);
+
+          const mat = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
+          const sub = subdomains[(tx + ty) % subdomains.length];
+          const url = `https://${sub}.tile.opentopomap.org/${zoom}/${tx}/${ty}.png`;
+
+          loader.load(
+            url,
+            tex => {
+              tex.colorSpace = THREE.SRGBColorSpace;
+              tex.anisotropy = 4;
+              mat.map = tex;
+              mat.needsUpdate = true;
+            },
+            undefined,
+            () => { mat.color.setHex(0x1e293b); }
+          );
+
+          const mesh = new THREE.Mesh(geo, mat);
+          mesh.position.set(centerX, 0, centerZ);
+          mapGroup.add(mesh);
+        }
+      }
+
+      const borderGeo = new THREE.EdgesGeometry(new THREE.BoxGeometry(SCENE_WIDTH, 0.04, SCENE_DEPTH));
+      const borderMat = new THREE.LineBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.8 });
+      const borderBox = new THREE.LineSegments(borderGeo, borderMat);
+      borderBox.position.y = 0.02;
+      mapGroup.add(borderBox);
+    }
+
+    buildOpenTopoMap3D();
+
+    const markerGeo = new THREE.SphereGeometry(0.28, 16, 16);
+    const markerMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+    const selectedMarker = new THREE.Mesh(markerGeo, markerMat);
+    selectedMarker.visible = false;
+    scene.add(selectedMarker);
+
+    const stemGeo = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(0, 0, 0),
+      new THREE.Vector3(0, 1, 0)
+    ]);
+    const stemMat = new THREE.LineBasicMaterial({ color: 0xffffff });
+    const selectedStem = new THREE.Line(stemGeo, stemMat);
+    selectedStem.visible = false;
+    scene.add(selectedStem);
+
+    let frames = [];
+    let currentFrameIdx = 0;
+    let cloudPoints = null;
+    let elevationExag = 0.002;
+    let pointSize = 0.24;
+    let selectedPointData = null;
+    let isPlaying = false;
+    let animTimer = null;
+    let animIntervalMs = 900;
+
+    function heightToRGB(htMeters) {
+      const t = Math.max(0, Math.min(1, htMeters / 16000));
+      const stops = [
+        [0.145, 0.388, 0.922],
+        [0.024, 0.714, 0.831],
+        [0.133, 0.773, 0.369],
+        [0.918, 0.702, 0.031],
+        [0.937, 0.267, 0.267]
+      ];
+      const scaled = t * (stops.length - 1);
+      const idx = Math.min(stops.length - 2, Math.floor(scaled));
+      const localT = scaled - idx;
+      const c0 = stops[idx];
+      const c1 = stops[idx + 1];
+      return [
+        c0[0] + (c1[0] - c0[0]) * localT,
+        c0[1] + (c1[1] - c0[1]) * localT,
+        c0[2] + (c1[2] - c0[2]) * localT
+      ];
+    }
+
+    function updateSelectionVisual() {
+      if (!selectedPointData) {
+        selectedMarker.visible = false;
+        selectedStem.visible = false;
+        return;
+      }
+      const y = Math.max(0, selectedPointData.htMeters * elevationExag);
+      selectedMarker.position.set(selectedPointData.x, y, selectedPointData.z);
+      selectedMarker.visible = true;
+
+      const posAttr = selectedStem.geometry.attributes.position;
+      posAttr.setXYZ(0, selectedPointData.x, 0, selectedPointData.z);
+      posAttr.setXYZ(1, selectedPointData.x, y, selectedPointData.z);
+      posAttr.needsUpdate = true;
+      selectedStem.visible = true;
+    }
+
+    function renderCurrentFrame() {
+      if (cloudPoints) {
+        scene.remove(cloudPoints);
+        cloudPoints.geometry.dispose();
+        cloudPoints.material.dispose();
+        cloudPoints = null;
+      }
+      if (!frames.length) return;
+
+      const frame = frames[currentFrameIdx];
+      const pts = frame.points;
+      const positions = new Float32Array(pts.length * 3);
+      const colors = new Float32Array(pts.length * 3);
+
+      for (let i = 0; i < pts.length; i++) {
+        const pt = pts[i];
+        positions[i * 3] = pt.x;
+        positions[i * 3 + 1] = Math.max(0, pt.htMeters * elevationExag);
+        positions[i * 3 + 2] = pt.z;
+
+        const [r, g, b] = heightToRGB(pt.htMeters);
+        colors[i * 3] = r;
+        colors[i * 3 + 1] = g;
+        colors[i * 3 + 2] = b;
+      }
+
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+      geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+      geometry.computeBoundingSphere();
+
+      const material = new THREE.PointsMaterial({
+        size: pointSize,
+        vertexColors: true,
+        transparent: true,
+        opacity: 0.95
+      });
+
+      cloudPoints = new THREE.Points(geometry, material);
+      scene.add(cloudPoints);
+
+      frameSliderEl.max = Math.max(0, frames.length - 1);
+      frameSliderEl.value = currentFrameIdx;
+      frameCounterEl.textContent = `${currentFrameIdx + 1} / ${frames.length}`;
+      timestampLabelEl.textContent = `${frame.label} (${pts.length.toLocaleString("pt-BR")} pts)`;
+      updateSelectionVisual();
+    }
+
+    function parseGeoJsonFrame(geojson, fallbackName) {
+      const features = Array.isArray(geojson.features) ? geojson.features : [];
+      const points = [];
+      for (const feat of features) {
+        if (!feat.geometry || feat.geometry.type !== "Point") continue;
+        const coords = feat.geometry.coordinates;
+        if (!Array.isArray(coords) || coords.length < 2) continue;
+
+        const lon = Number(coords[0]);
+        const lat = Number(coords[1]);
+        const htMeters = Number(feat.properties?.ht_m ?? coords[2] ?? 0);
+        if (!Number.isFinite(lon) || !Number.isFinite(lat) || !Number.isFinite(htMeters)) continue;
+
+        const { x, z } = geoToSceneXZ(lon, lat);
+        points.push({ x, z, lon, lat, htMeters });
+      }
+      const label = geojson.timestamp_utc || geojson.name || fallbackName;
+      return { label, filename: fallbackName, points };
+    }
+
+    async function loadSequenceFromServer() {
+      const loaded = [];
+      for (const fname of SEQUENCE_FILES) {
+        try {
+          const res = await fetch(`./${fname}`);
+          if (!res.ok) continue;
+          const data = await res.json();
+          loaded.push(parseGeoJsonFrame(data, fname));
+        } catch (_) {}
+      }
+      if (loaded.length > 0) {
+        frames = loaded;
+        currentFrameIdx = 0;
+        renderCurrentFrame();
+        infoEl.textContent = `Série carregada: ${frames.length} arquivos em ordem cronológica.`;
+      } else {
+        infoEl.textContent = "Selecione os arquivos GeoJSON pelo botão acima ou abra via servidor HTTP / GitHub Pages.";
+      }
+    }
+
+    loadSequenceFromServer();
+
+    function stopAnimation() {
+      isPlaying = false;
+      playPauseBtn.textContent = "▶ Animar";
+      if (animTimer) {
+        clearInterval(animTimer);
+        animTimer = null;
+      }
+    }
+
+    function startAnimation() {
+      if (frames.length < 2) return;
+      isPlaying = true;
+      playPauseBtn.textContent = "⏸ Pausar";
+      animTimer = setInterval(() => {
+        currentFrameIdx = (currentFrameIdx + 1) % frames.length;
+        renderCurrentFrame();
+      }, animIntervalMs);
+    }
+
+    playPauseBtn.addEventListener("click", () => isPlaying ? stopAnimation() : startAnimation());
+
+    document.getElementById("prevBtn").addEventListener("click", () => {
+      if (!frames.length) return;
+      stopAnimation();
+      currentFrameIdx = (currentFrameIdx - 1 + frames.length) % frames.length;
+      renderCurrentFrame();
+    });
+
+    document.getElementById("nextBtn").addEventListener("click", () => {
+      if (!frames.length) return;
+      stopAnimation();
+      currentFrameIdx = (currentFrameIdx + 1) % frames.length;
+      renderCurrentFrame();
+    });
+
+    frameSliderEl.addEventListener("input", e => {
+      if (!frames.length) return;
+      stopAnimation();
+      currentFrameIdx = Number(e.target.value);
+      renderCurrentFrame();
+    });
+
+    document.getElementById("speedSlider").addEventListener("input", e => {
+      animIntervalMs = Number(e.target.value);
+      document.getElementById("speedLabel").textContent = `${animIntervalMs} ms`;
+      if (isPlaying) { stopAnimation(); startAnimation(); }
+    });
+
+    document.getElementById("fileInput").addEventListener("change", async event => {
+      const files = Array.from(event.target.files || []).sort((a, b) => a.name.localeCompare(b.name));
+      if (!files.length) return;
+      stopAnimation();
+      const loaded = [];
+      for (const file of files) {
+        try {
+          const text = await file.text();
+          loaded.push(parseGeoJsonFrame(JSON.parse(text), file.name));
+        } catch (_) {}
+      }
+      if (loaded.length > 0) {
+        frames = loaded;
+        currentFrameIdx = 0;
+        selectedPointData = null;
+        selectedBoxEl.style.display = "none";
+        clickPopupEl.style.display = "none";
+        renderCurrentFrame();
+        infoEl.textContent = `Carregados ${frames.length} arquivos locais em ordem cronológica.`;
+      } else {
+        infoEl.textContent = "Não foi possível ler os arquivos GeoJSON selecionados.";
+      }
+    });
+
+    const raycaster = new THREE.Raycaster();
+    const pointer = new THREE.Vector2();
+    let downPos = { x: 0, y: 0 };
+
+    renderer.domElement.addEventListener("pointerdown", e => { downPos = { x: e.clientX, y: e.clientY }; });
+    renderer.domElement.addEventListener("pointerup", e => {
+      const dist = Math.hypot(e.clientX - downPos.x, e.clientY - downPos.y);
+      if (dist > 5 || !cloudPoints || !frames.length) return;
+
+      const rect = renderer.domElement.getBoundingClientRect();
+      pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+      pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+
+      raycaster.params.Points.threshold = Math.max(0.25, pointSize * 1.4);
+      raycaster.setFromCamera(pointer, camera);
+
+      const hits = raycaster.intersectObject(cloudPoints);
+      if (hits.length > 0 && hits[0].index !== undefined) {
+        const pt = frames[currentFrameIdx].points[hits[0].index];
+        if (!pt) return;
+
+        selectedPointData = pt;
+        updateSelectionVisual();
+
+        const htKm = (pt.htMeters / 1000).toFixed(2);
+        const htmlInfo = `
+          <strong>Ponto Selecionado (${frames[currentFrameIdx].label})</strong><br/>
+          Altura (HT): <strong>${pt.htMeters.toFixed(1)} m</strong> (${htKm} km)<br/>
+          Latitude: <strong>${pt.lat.toFixed(4)}°</strong><br/>
+          Longitude: <strong>${pt.lon.toFixed(4)}°</strong>
+        `;
+        selectedBoxEl.innerHTML = htmlInfo;
+        selectedBoxEl.style.display = "block";
+
+        clickPopupEl.innerHTML = htmlInfo;
+        clickPopupEl.style.left = `${e.clientX}px`;
+        clickPopupEl.style.top = `${e.clientY}px`;
+        clickPopupEl.style.display = "block";
+      }
+    });
+
+    document.getElementById("exagInput").addEventListener("input", e => {
+      elevationExag = Number(e.target.value);
+      document.getElementById("exagLabel").textContent = `${elevationExag.toFixed(4)}x`;
+      renderCurrentFrame();
+    });
+
+    document.getElementById("sizeInput").addEventListener("input", e => {
+      pointSize = Number(e.target.value);
+      document.getElementById("sizeLabel").textContent = pointSize.toFixed(2);
+      if (cloudPoints) cloudPoints.material.size = pointSize;
+    });
+
+    window.addEventListener("resize", () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    function animate() {
+      requestAnimationFrame(animate);
+      controls.update();
+      renderer.render(scene, camera);
+    }
+    animate();
+  </script>
+</body>
+</html>
